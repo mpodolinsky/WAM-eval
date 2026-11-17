@@ -69,6 +69,77 @@ The full 500-episode evaluation has not been run here. A check with one episode 
 43 s). Peak GPU memory was 10.2 GB at batch size 1. Rendering with the broken MuJoCo bindings described above gave 0 of
 8 completed episodes on the same check.
 
+## Predicted video
+
+Cosmos 3 is a world action model: together with each chunk of 16 actions it predicts what the two cameras will see
+over the next 16 steps. By default this video is thrown away. `--policy.save_predicted_video=true` keeps it, and
+`lerobot-eval` then writes `pred_episode_*.mp4` next to the rollout videos.
+
+**Format.** The policy denoises the video as latents of the Wan2.2 VAE, jointly with the actions, in the same 30 steps:
+
+| | |
+|---|---|
+| horizon | 16 frames after the current one, at 20 fps = 0.8 s, the same 16 steps as the action chunk |
+| picture | the two cameras are shrunk and tiled into one 160x320 image: agentview left, wrist right |
+| latents | `[48, 5, 10, 20]` (channels, frames, height, width) = 1000 vectors of 48 numbers, standardised per channel |
+| latent frame | frame 0 is the current frame (given, not predicted); each later one stands for 4 video frames, 0.2 s |
+| latent cell | one 16x16 pixel patch of the 160x320 picture |
+| transformer | 2x2 patches of cells become 250 tokens (5 frames x 5 x 10) of 192 numbers, projected to the width of the backbone, 2048, followed by the 16 action tokens |
+| decoded | the VAE turns the latents into 17 frames `[3, 160, 320]`, the current frame and the 16 predicted ones |
+
+<p align="center">
+  <img src="assets/latents.gif" alt="The predicted latents of one chunk as colour maps, and the pixel frames decoded from them" width="648">
+</p>
+
+The five latent frames of one real prediction (task 0), each drawn as a colour map of the first three principal
+components of its 48 channels, and the pixel frames each one decodes to.
+
+**Prediction against reality.** In a closed-loop episode the policy predicts a new chunk every 16 steps. Top: the real
+frames of the simulator; bottom: the frames predicted 1 to 16 steps ahead for the same moments (every second frame is
+shown, in real time). The first 12 chunks (192 steps) of episode 0 of three tasks:
+
+<p align="center">
+  <img src="assets/predicted_task0.gif" alt="Real and predicted frames, task 0" width="480">
+  <img src="assets/predicted_task3.gif" alt="Real and predicted frames, task 3" width="480">
+  <img src="assets/predicted_task4.gif" alt="Real and predicted frames, task 4" width="480">
+</p>
+
+Tasks 0, 3 and 4: "put both the alphabet soup and the tomato sauce in the basket", "put the black bowl in the bottom
+drawer of the cabinet and close it", "put the white mug on the left plate and put the yellow and white mug on the right
+plate".
+
+PSNR in dB between the predicted frame k steps ahead and the real frame, averaged over the 12 chunks, against the
+trivial prediction "nothing moves" (the first frame repeated):
+
+| task | k=1 | k=4 | k=8 | k=16 |
+|---|---|---|---|---|
+| 0, predicted / nothing moves | 29.7 / 26.2 | 27.4 / 21.2 | 25.7 / 19.0 | 24.1 / 17.5 |
+| 3, predicted / nothing moves | 29.5 / 25.7 | 25.8 / 19.8 | 24.1 / 16.9 | 21.8 / 15.3 |
+| 4, predicted / nothing moves | 31.2 / 27.4 | 27.2 / 22.0 | 24.8 / 19.7 | 23.6 / 17.9 |
+
+The prediction is better than "nothing moves" at every horizon and degrades with it. The decoded current frame itself
+only reaches about 33 to 35 dB (measured on four chunks of task 0), the limit of the VAE.
+
+**Denoising.** The sampler's estimate of the clean video (`x0 = x_t - sigma * v`) at denoising steps 0, 2, 5, 10, 20 and 29 of
+30, for one chunk of task 0, and the final prediction in the last row. Columns are frames 0, 4, 8, 12 and 16. The
+estimate is already a plausible, blurry future at step 0, when the input is pure noise; later steps sharpen it.
+
+<p align="center">
+  <img src="assets/denoise_task0.png" alt="Estimate of the clean video at several denoising steps" width="700">
+</p>
+
+**Noise seeds.** The video is a sample, not a deterministic forecast: row 1 is the real future, row 2 the prediction
+used by the policy, rows 3 to 5 other noise seeds for the same observation (a harder chunk of task 0: the basket
+approaches in the wrist view, and the seeds differ in how close it gets and in its fine texture).
+
+<p align="center">
+  <img src="assets/seeds_task0.png" alt="Real frames, the prediction and predictions from three other noise seeds" width="700">
+</p>
+
+These are three tasks, one episode each, and PSNR measures pixels, not whether the task succeeds. Reproduce with
+`uv run --no-sync python scripts/predicted_video.py --task-id 0 --chunks 12 --detail-chunks 0,7` (about 11 GB of GPU
+memory); it writes the GIFs, the figures and `metrics.json` to `outputs/predicted_video/task<ID>/`.
+
 ## Licence
 
 The code in this repository is Apache-2.0 licensed. The Cosmos3 weights are released under the
