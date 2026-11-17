@@ -120,21 +120,10 @@ trivial prediction "nothing moves" (the first frame repeated):
 The prediction is better than "nothing moves" at every horizon and degrades with it. The decoded current frame itself
 only reaches about 33 to 35 dB (measured on four chunks of task 0), the limit of the VAE.
 
-**Denoising.** The sampler's estimate of the clean video (`x0 = x_t - sigma * v`) at denoising steps 0, 2, 5, 10, 20 and 29 of
-30, for one chunk of task 0, and the final prediction in the last row. Columns are frames 0, 4, 8, 12 and 16. The
-estimate is already a plausible, blurry future at step 0, when the input is pure noise; later steps sharpen it.
-
-<p align="center">
-  <img src="assets/denoise_task0.png" alt="Estimate of the clean video at several denoising steps" width="700">
-</p>
-
-**Noise seeds.** The video is a sample, not a deterministic forecast: row 1 is the real future, row 2 the prediction
-used by the policy, rows 3 to 5 other noise seeds for the same observation (a harder chunk of task 0: the basket
-approaches in the wrist view, and the seeds differ in how close it gets and in its fine texture).
-
-<p align="center">
-  <img src="assets/seeds_task0.png" alt="Real frames, the prediction and predictions from three other noise seeds" width="700">
-</p>
+**Denoising and noise seeds.** The sampler's estimate of the clean video is already a plausible, blurry future at the
+first denoising step, when the input is pure noise; later steps sharpen it. The video is a sample, not a deterministic
+forecast: other noise seeds for the same observation give similar futures that differ in detail, for example in how
+close an approaching object gets. The script writes figures of both to `outputs/predicted_video/`.
 
 These are three tasks, one episode each, and PSNR measures pixels, not whether the task succeeds. Reproduce with
 `uv run --no-sync python scripts/predicted_video.py --task-id 0 --chunks 12 --detail-chunks 0,7` (about 11 GB of GPU
