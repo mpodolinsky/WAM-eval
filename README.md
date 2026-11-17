@@ -92,7 +92,8 @@ over the next 16 steps. By default this video is thrown away. `--policy.save_pre
 </p>
 
 The five latent frames of one real prediction (task 0), each drawn as a colour map of the first three principal
-components of its 48 channels, and the pixel frames each one decodes to.
+components of its 48 channels. The highlighted latent frame goes through the VAE decoder (described below) to the pixel
+frames under it.
 
 **From latents to frames.** The Wan2.2 VAE decoder turns the latents into pictures: it undoes the per-channel
 standardisation, then upsamples 16x in height and width (10x20 cells become 160x320 pixels) and 4x in time after the

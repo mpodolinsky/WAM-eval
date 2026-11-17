@@ -85,9 +85,26 @@ def write_gif(path: Path, frames: list[np.ndarray], fps: int) -> None:
     subprocess.run(cmd, input=b"".join(f.tobytes() for f in frames), check=True)
 
 
+def font(size: int):
+    """A TrueType font when the system has one (the default bitmap font squeezes spaces), else PIL's default."""
+    from PIL import ImageFont
+
+    for name in ("DejaVuSans.ttf", "Arial.ttf", "LiberationSans-Regular.ttf"):
+        try:
+            return ImageFont.truetype(name, size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def arrow(draw: ImageDraw.ImageDraw, x0: int, x1: int, y: int, color=(200, 200, 200)) -> None:
+    draw.line([x0, y, x1 - 5, y], fill=color, width=2)
+    draw.polygon([(x1, y), (x1 - 8, y - 5), (x1 - 8, y + 5)], fill=color)
+
+
 def latent_gif(latents: np.ndarray, pred: np.ndarray, path: Path) -> None:
-    """The predicted latents [C, T, h, w] as colour maps (first 3 principal components of the C channels), with the
-    pixel frames [17, 3, H, W] that the VAE decodes from them: latent frame j covers pixel frames 4j-3 .. 4j."""
+    """The predicted latents [C, T, h, w] as colour maps (first 3 principal components of the C channels), a flowchart
+    of the VAE decoder, and the pixel frames [17, 3, H, W] it decodes: latent frame j covers pixel frames 4j-3 .. 4j."""
     c, t, gh, gw = latents.shape
     flat = latents.reshape(c, -1).T
     flat = flat - flat.mean(0)
@@ -99,23 +116,41 @@ def latent_gif(latents: np.ndarray, pred: np.ndarray, path: Path) -> None:
     width = t * gw * cell + (t + 1) * pad
     pix_w = width - 2 * pad
     pix_h = round(pred.shape[2] * pix_w / pred.shape[3])
-    top = 40 + gh * cell + 24
+    maps_y, flow_y, flow_h = 44, 44 + gh * cell + 26, 56
+    top = flow_y + flow_h + 12
+    big, small = font(13), font(11)
+    white, grey, yellow = (255, 255, 255), (150, 150, 150), (255, 210, 0)
+    height, wd = pred.shape[2], pred.shape[3]
     frames = []
     for j in range(t):
         for k in [0] if j == 0 else range(4 * j - 3, 4 * j + 1):
-            canvas = Image.new("RGB", (width, top + pix_h + 22), (24, 24, 24))
+            canvas = Image.new("RGB", (width, top + pix_h + 26), (24, 24, 24))
             draw = ImageDraw.Draw(canvas)
-            draw.text((pad, 6), f"predicted latents: {c} channels x {t} frames x {gh} x {gw} = {t * gh * gw} vectors of {c} numbers", fill=(255, 255, 255))
-            draw.text((pad, 20), "each cell is a 16x16 pixel patch; each frame stands for 4 video frames (the first is the given frame)", fill=(170, 170, 170))
+            draw.text((pad, 4), f"predicted latents: {c} channels x {t} frames x {gh} x {gw} = {t * gh * gw} vectors of {c} numbers", font=big, fill=white)
+            draw.text((pad, 23), "each cell stands for a 16x16 pixel patch, each frame for 4 video frames (the first is the given frame)", font=small, fill=grey)
             for i, m in enumerate(maps):
                 x = pad + i * (gw * cell + pad)
-                canvas.paste(m, (x, 40))
-                draw.text((x, 40 + gh * cell + 4), f"latent frame {i}", fill=(255, 255, 255) if i == j else (120, 120, 120))
+                canvas.paste(m, (x, maps_y))
+                draw.text((x, maps_y + gh * cell + 4), f"latent frame {i}", font=small, fill=white if i == j else (110, 110, 110))
                 if i == j:
-                    draw.rectangle([x - 2, 38, x + gw * cell + 1, 40 + gh * cell + 1], outline=(255, 210, 0), width=2)
+                    draw.rectangle([x - 2, maps_y - 2, x + gw * cell + 1, maps_y + gh * cell + 1], outline=yellow, width=2)
+            # flowchart: selected latent frame -> VAE decoder -> pixel frames
+            frames_text = "pixel frame 0" if j == 0 else f"pixel frames {4 * j - 3}-{4 * j}"
+            boxes = [
+                (pad, 150, [f"latent frame {j}", f"{c} x {gh} x {gw}"], yellow),
+                (pad + 150 + 36, 262, ["Wan2.2 VAE decoder", "undo the standardisation", "16x space, 4x time (causal 3D conv)"], white),
+                (width - pad - 150, 150, [frames_text, f"3 x {height} x {wd}"], white),
+            ]
+            for n, (x, w, lines, color) in enumerate(boxes):
+                draw.rounded_rectangle([x, flow_y, x + w, flow_y + flow_h], radius=6, outline=color, width=2)
+                for li, text in enumerate(lines):
+                    draw.text((x + 8, flow_y + 7 + li * 16), text, font=big if li == 0 else small, fill=white if li == 0 else grey)
+                if n < 2:
+                    nx = boxes[n + 1][0]
+                    arrow(draw, x + w + 4, nx - 4, flow_y + flow_h // 2)
             frame = Image.fromarray(pred[k].transpose(1, 2, 0)).resize((pix_w, pix_h), Image.LANCZOS)
             canvas.paste(frame, (pad, top))
-            draw.text((pad, top + pix_h + 6), f"decoded pixel frame {k} ({k / 20:.2f} s after the current frame)", fill=(255, 255, 255))
+            draw.text((pad, top + pix_h + 6), f"decoded pixel frame {k} ({k / 20:.2f} s after the current frame)", font=big, fill=white)
             frames.append(np.array(canvas))
     write_gif(path, frames + frames[-1:] * 3, fps=4)
 
