@@ -94,6 +94,13 @@ over the next 16 steps. By default this video is thrown away. `--policy.save_pre
 The five latent frames of one real prediction (task 0), each drawn as a colour map of the first three principal
 components of its 48 channels, and the pixel frames each one decodes to.
 
+**From latents to frames.** The Wan2.2 VAE decoder turns the latents into pictures: it undoes the per-channel
+standardisation, then upsamples 16x in height and width (10x20 cells become 160x320 pixels) and 4x in time after the
+first frame (5 latent frames become 1 + 4 x 4 = 17 pixel frames; latent frame j gives frames 4j-3 to 4j). It is a causal
+3D convolutional network, so the four frames of a latent frame are not copies: they depend on that latent frame and
+the ones before it. The policy never decodes: the actions come from the action tokens, so decoding is only needed to
+look at the video.
+
 **Prediction against reality.** In a closed-loop episode the policy predicts a new chunk every 16 steps. Top: the real
 frames of the simulator; bottom: the frames predicted 1 to 16 steps ahead for the same moments (every second frame is
 shown, in real time). The first 12 chunks (192 steps) of episode 0 of three tasks:
