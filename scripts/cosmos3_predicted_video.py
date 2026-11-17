@@ -1,10 +1,10 @@
 """Compare the video Cosmos3 predicts with what the simulator then does, in a closed-loop LIBERO-10 episode.
 
-    uv run --no-sync python scripts/predicted_video.py --task-id 0 --chunks 12
+    uv run --no-sync python scripts/cosmos3_predicted_video.py --task-id 0 --chunks 12
 
 The policy runs as in `eval.sh` (one episode, batch size 1). Every 16 steps it predicts a chunk of 16 actions together
 with the next 16 frames of the two cameras; the prediction is decoded and paired with the real frames that follow.
-Writes to `outputs/predicted_video/task<ID>/`:
+Writes to `outputs/cosmos3_predicted_video/task<ID>/`:
 
     episode.gif            real (top) and predicted (bottom) frames of every chunk, one chunk after the other
                            (every second frame, at 10 fps)
@@ -157,7 +157,7 @@ def latent_gif(latents: np.ndarray, pred: np.ndarray, path: Path) -> None:
 
 def run(args: argparse.Namespace) -> None:
     detail = {int(c) for c in args.detail_chunks.split(",") if c}
-    out_dir = args.output_dir or REPO / "outputs" / "predicted_video" / f"task{args.task_id}"
+    out_dir = args.output_dir or REPO / "outputs" / "cosmos3_predicted_video" / f"task{args.task_id}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     @parser.wrap()

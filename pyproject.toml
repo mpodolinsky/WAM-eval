@@ -1,11 +1,11 @@
 [project]
-name = "cosmos3-libero"
+name = "wam-eval"
 version = "0.1.0"
-description = "Evaluate lerobot/Cosmos3-Edge-Policy-LIBERO_10 on LIBERO-10"
+description = "Evaluate world action models and VLAs on LIBERO-10 with LeRobot"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "lerobot[cosmos3,libero]",  # submodules/lerobot, pinned to the commit of the model card
+    "lerobot[cosmos3,vla_jepa,libero]",  # submodules/lerobot, pinned to the commit of the Cosmos3 model card
     "hf-libero",  # submodules/LIBERO, v0.1.4 as in the model card
     "imageio[ffmpeg]",  # rollout videos
 ]
