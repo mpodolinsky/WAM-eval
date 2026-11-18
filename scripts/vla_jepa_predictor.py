@@ -23,6 +23,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import torch
@@ -152,30 +153,43 @@ def score(pred: torch.Tensor, gt: torch.Tensor, ref: torch.Tensor, moving: float
     return out
 
 
+def unit_embeddings(rp: RuntimePredictor, frames: list[dict], t: int, task: str) -> dict | None:
+    """The embeddings behind one policy call at step `t`: the runtime prediction from the buffer, and the real ones.
+
+    Returns None when the episode has too few frames around `t` for the real clip of the training layout
+    `[t - s, t, t + s, ...]`, embedded in one pass (the ground truth)."""
+    s, h = rp.stride, rp.horizon
+    n_frames = 2 * (h + 1)  # positions 0..h, 2 frames each
+    if t - s < 0 or t + (n_frames - 2) * s >= len(frames):
+        return None
+    rp.buffer.clear()
+    for f in frames[t - s : t + 1]:
+        rp.push(f)
+    with torch.no_grad():
+        inputs = rp.clip_inputs(rp.context(), task)
+        tokens = rp.action_tokens(inputs)  # 24 tokens, from the clip's first frame (t - s)
+        context = rp.embed(inputs["videos"])  # position 0 from the two buffered frames only
+        clip = rp.clip_inputs(frames[t - s : t - s + n_frames * s : s], task)
+        full = rp.embed(clip["videos"]).reshape(1, h + 1, TOKENS_PER_POSITION, -1)[0]
+        return {"inputs": inputs, "tokens": tokens, "context": context, "runtime": rp.rollout(context, tokens),
+                "clip": clip, "full": full}  # fmt: skip
+
+
 def evaluate_episode(rp: RuntimePredictor, frames: list[dict], task: str, call_every: int) -> list[dict]:
     """Replay the policy calls of an episode through the buffer and score each prediction."""
-    s, h, units = rp.stride, rp.horizon, []
+    h, units = rp.horizon, []
     control = CONTROL_TASK if task != CONTROL_TASK else CONTROL_TASK_ALT
     previous = None  # the action tokens of the previous policy call: right kind of tokens, wrong moment
-    n_frames = 2 * (h + 1)  # the clip of the training layout: positions 0..h, 2 frames each
     for t in range(0, len(frames), call_every):  # t = the step of a policy call
-        if t - s < 0 or t + (n_frames - 2) * s >= len(frames):
+        u = unit_embeddings(rp, frames, t, task)
+        if u is None:
             continue
-        rp.buffer.clear()
-        for f in frames[t - s : t + 1]:
-            rp.push(f)
+        inputs, tokens, context, runtime, clip, full = (u[k] for k in ("inputs", "tokens", "context", "runtime", "clip", "full"))
         with torch.no_grad():
-            inputs = rp.clip_inputs(rp.context(), task)
-            tokens = rp.action_tokens(inputs)  # 24 tokens, from the clip's first frame (t - s)
-            context = rp.embed(inputs["videos"])  # position 0 from the two buffered frames only
-            runtime = rp.rollout(context, tokens)
             wrong = rp.rollout(context, rp.action_tokens(inputs, control))
             zero = rp.rollout(context, torch.zeros_like(tokens))
             other_time = rp.rollout(context, previous) if previous is not None else None
             previous = tokens
-            # The training layout: a full clip [t - s, t, t + s, ...], embedded in one pass.
-            clip = rp.clip_inputs(frames[t - s : t - s + n_frames * s : s], task)
-            full = rp.embed(clip["videos"]).reshape(1, h + 1, TOKENS_PER_POSITION, -1)[0]
             gt = full[1:]
             tf = rp.model.video_predictor(
                 full[:h].reshape(1, -1, full.shape[-1]).float(), tokens[:, : h * rp.tokens_per_step].float()
@@ -211,54 +225,75 @@ def aggregate(units: list[dict], horizon: int) -> dict:
     return out
 
 
+def launch(out_dir: Path, fn) -> None:
+    """Call `fn(cfg)` with the LeRobot config of the VLA-JEPA LIBERO-10 evaluation (one episode, batch size 1)."""
+    sys.argv = [
+        "vla_jepa", "--policy.path=lerobot/VLA-JEPA-LIBERO", "--seed=0", "--env.type=libero", "--env.task=libero_10",
+        "--eval.n_episodes=1", "--eval.batch_size=1", "--eval.use_async_envs=false", f"--output_dir={out_dir / '_cfg'}",
+    ]  # fmt: skip
+    parser.wrap()(fn)()
+
+
+def setup(cfg: EvalPipelineConfig) -> SimpleNamespace:
+    """The environments, policy and processors of the evaluation, built as `lerobot-eval` builds them."""
+    set_seed(cfg.seed)
+    envs = next(iter(make_env(cfg.env, n_envs=1, use_async_envs=False).values()))
+    policy = make_policy(cfg=cfg.policy, env_cfg=cfg.env, rename_map=cfg.rename_map)
+    policy.eval()
+    weights = check_weights(policy, "lerobot/VLA-JEPA-LIBERO")
+    print("predictor weights:", weights, flush=True)
+    pre, post = make_pre_post_processors(
+        policy_cfg=cfg.policy, pretrained_path=cfg.policy.pretrained_path,
+        preprocessor_overrides={"device_processor": {"device": str(policy.config.device)}},
+    )  # fmt: skip
+    env_pre, env_post = make_env_pre_post_processors(env_cfg=cfg.env, policy_cfg=cfg.policy)
+    return SimpleNamespace(cfg=cfg, envs=envs, policy=policy, pre=pre, post=post, env_pre=env_pre, env_post=env_post,
+                           weights=weights)  # fmt: skip
+
+
+def run_episode(sim: SimpleNamespace, env) -> tuple[list[dict], str, bool]:
+    """One closed-loop episode with the unchanged policy: the camera frames the policy saw at every step, the task
+    and whether it succeeded."""
+    keys = list(sim.policy.config.image_features)
+    sim.policy.reset(), sim.pre.reset(), sim.post.reset()
+    obs, _ = env.reset(seed=[sim.cfg.seed], options={NEW_ROLLOUT_OPTION: True})
+    task = list(env.call("task_description"))
+    frames, done, success = [], False, False
+    while not done and len(frames) < env.call("_max_episode_steps")[0]:
+        o = preprocess_observation(obs)
+        o["task"] = task
+        o = sim.pre(sim.env_pre(o))
+        frames.append({k: o[k].detach().half().cpu() for k in keys})
+        with torch.inference_mode():
+            action = transition_to_policy_action(policy_output_to_transition(sim.policy.select_action(o)))
+        action = sim.env_post({"action": sim.post(action)})["action"]
+        obs, _, terminated, truncated, _ = env.step(action.cpu().numpy())
+        done, success = bool(np.all(terminated | truncated)), bool(np.any(terminated))
+    return [{k: v.float().cuda() for k, v in f.items()} for f in frames], task[0], success
+
+
 def run(args: argparse.Namespace) -> None:
     out_dir = args.output_dir or REPO / "outputs" / "vla_jepa_predictor" / f"stride{args.stride}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    @parser.wrap()
     def main(cfg: EvalPipelineConfig):
-        set_seed(cfg.seed)
-        envs = next(iter(make_env(cfg.env, n_envs=1, use_async_envs=False).values()))
-        policy = make_policy(cfg=cfg.policy, env_cfg=cfg.env, rename_map=cfg.rename_map)
-        policy.eval()
-        weights = check_weights(policy, "lerobot/VLA-JEPA-LIBERO")
-        print("predictor weights:", weights, flush=True)
-        pre, post = make_pre_post_processors(
-            policy_cfg=cfg.policy, pretrained_path=cfg.policy.pretrained_path,
-            preprocessor_overrides={"device_processor": {"device": str(policy.config.device)}},
-        )  # fmt: skip
-        env_pre, env_post = make_env_pre_post_processors(env_cfg=cfg.env, policy_cfg=cfg.policy)
-        rp = RuntimePredictor(policy, stride=args.stride, horizon=args.horizon)
-        keys = rp.keys
+        sim = setup(cfg)
+        rp = RuntimePredictor(sim.policy, stride=args.stride, horizon=args.horizon)
         all_units, per_task = [], {}
-        for task_id, env in sorted(envs.items()):
+        for task_id, env in sorted(sim.envs.items()):
             if args.task_ids and task_id not in args.task_ids:
                 continue
-            policy.reset(), pre.reset(), post.reset()
-            obs, _ = env.reset(seed=[cfg.seed], options={NEW_ROLLOUT_OPTION: True})
-            task = list(env.call("task_description"))
-            frames, done, step = [], False, 0
-            while not done and step < env.call("_max_episode_steps")[0]:
-                o = preprocess_observation(obs)
-                o["task"] = task
-                o = pre(env_pre(o))
-                frames.append({k: o[k].detach().half().cpu() for k in keys})
-                with torch.inference_mode():
-                    action = transition_to_policy_action(policy_output_to_transition(policy.select_action(o)))
-                action = env_post({"action": post(action)})["action"]
-                obs, _, terminated, truncated, _ = env.step(action.cpu().numpy())
-                done, step = bool(np.all(terminated | truncated)), step + 1
-            frames = [{k: v.float().cuda() for k, v in f.items()} for f in frames]
+            frames, task, success = run_episode(sim, env)
             t0 = time.time()
-            units = evaluate_episode(rp, frames, task[0], call_every=policy.config.n_action_steps)
+            units = evaluate_episode(rp, frames, task, call_every=sim.policy.config.n_action_steps)
             for u in units:
                 u["task_id"] = task_id
             all_units += units
-            per_task[task_id] = {"task": task[0], "steps": step, "units": len(units)}
-            print(f"task {task_id}: {step} steps, {len(units)} predictions scored in {time.time() - t0:.0f}s", flush=True)
+            per_task[task_id] = {"task": task, "steps": len(frames), "success": success, "units": len(units)}
+            print(f"task {task_id}: {len(frames)} steps, {len(units)} predictions scored in {time.time() - t0:.0f}s", flush=True)
             del frames
             torch.cuda.empty_cache()
-        result = {"stride": args.stride, "horizon": args.horizon, "weights": weights, "tasks": per_task,
+        result = {"stride": args.stride, "horizon": args.horizon, "weights": sim.weights, "tasks": per_task,
                   **aggregate(all_units, args.horizon)}  # fmt: skip
         reference_gap = float(np.nanmax([abs(u["reference_loss"] - u["teacher_forced_l1"]) for u in all_units]))
         result["max_gap_to_library_world_model_loss"] = reference_gap
@@ -266,12 +301,7 @@ def run(args: argparse.Namespace) -> None:
         print(json.dumps({k: result[k] for k in ("units", "runtime", "persistence", "teacher_forced",
                                                   "max_gap_to_library_world_model_loss")}, indent=1))  # fmt: skip
 
-    sys.argv = [
-        "vla_jepa_predictor", "--policy.path=lerobot/VLA-JEPA-LIBERO", "--seed=0", "--env.type=libero",
-        "--env.task=libero_10", "--eval.n_episodes=1", "--eval.batch_size=1", "--eval.use_async_envs=false",
-        f"--output_dir={out_dir / '_cfg'}",
-    ]  # fmt: skip
-    main()
+    launch(out_dir, main)
 
 
 if __name__ == "__main__":

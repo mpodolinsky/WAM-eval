@@ -85,21 +85,46 @@ success. Reproduce with `uv run --no-sync python scripts/cosmos3_predicted_video
 --detail-chunks 0,7` (about 11 GB of GPU memory); it writes the GIFs, `metrics.json` and figures of the denoising and
 of other noise seeds to `outputs/cosmos3_predicted_video/`.
 
-## VLA-JEPA: the world-model head at runtime
+## VLA-JEPA
 
-VLA-JEPA acts without ever running its world model: a V-JEPA2 predictor, trained as an auxiliary loss, guesses the
-embeddings of the next frames from the embeddings of earlier ones and Qwen's "action tokens". `RuntimePredictor` in
-[`scripts/vla_jepa_predictor.py`](scripts/vla_jepa_predictor.py) runs it anyway, from a buffer of the last two frames
-(one V-JEPA2 tubelet), and rolls it forward for 3 positions of 2 frames, up to 6 steps (0.3 s) ahead. The policy runs
-unchanged. The output is V-JEPA2 embeddings, 256 tokens of 2048 numbers per position, not pictures.
+<p align="center">
+  <img src="assets/vla_jepa_architecture.gif" alt="How VLA-JEPA acts, and where its world-model head sits" width="760">
+</p>
 
-The predictor and the V-JEPA2 encoder are in the checkpoint: the predictor's weights match it exactly, and the
-encoder is Facebook's public `vjepa2-vitl-fpc64-256` (identical after casting to BF16), frozen in training. The
-checkpoint stores both in BF16, so they may be a rounding of the training weights; I did not compare with the
-authors' original checkpoint.
+Qwen3-VL reads the cameras and the instruction. Its hidden states at 32 "embodied" tokens condition a flow-matching
+DiT that outputs 7 actions. Its hidden states at 24 "action tokens" condition a V-JEPA2 predictor that guesses the
+embeddings of the next frames (from a frozen V-JEPA2 encoder) and is trained with an L1 loss of weight 0.1. Only the
+first path runs when the policy acts.
+
+<p align="center">
+  <img src="assets/vla_jepa_rollouts.gif" alt="Closed-loop rollouts of VLA-JEPA on tasks 0, 3 and 4" width="320">
+</p>
+
+Rollouts of the unchanged policy on tasks 0, 3 and 4, both cameras (every third step, real time, the first 260 steps).
+Tasks 0 and 4 succeeded, at steps 258 and 223; task 3 failed after 520 steps. One episode each.
+
+### The world-model head at runtime
+
+`RuntimePredictor` in [`scripts/vla_jepa_predictor.py`](scripts/vla_jepa_predictor.py) runs the predictor anyway, from a
+buffer of the last two frames (one V-JEPA2 tubelet), and rolls it forward for 3 positions of 2 frames, up to 6 steps
+(0.3 s) ahead. The policy runs unchanged. The output is V-JEPA2 embeddings (256 tokens of 2048 numbers per position),
+not pictures. The predictor and the V-JEPA2 encoder are in the checkpoint: the predictor's weights match it exactly,
+and the encoder is Facebook's public `vjepa2-vitl-fpc64-256` (identical after casting to BF16). The checkpoint stores
+both in BF16; I did not compare with the authors' original checkpoint.
+
+<p align="center">
+  <img src="assets/vla_jepa_world_model.gif" alt="Real frames, V-JEPA2 embeddings of them, and the embeddings predicted at runtime, as colour maps" width="734">
+</p>
+
+At every policy call of one episode (task 0): the real frames that followed, V-JEPA2's embedding of them, the
+embedding the predictor guesses from the two latest frames, and the "nothing changes" guess (the current embedding
+repeated). Embeddings are drawn as colour maps, the first three principal components of each camera's 1024 features,
+fitted on the real ones. The prediction is a smoother, lower-contrast version of the real map, as expected of a
+predictor trained with an L1 loss, and its cosine similarity to the real embedding is about the same as copying; the
+difference is on the tokens that change, below.
 
 L1 error against V-JEPA2's embeddings of the real frames that followed (the training loss), 10 tasks with one episode
-each (369 predictions); lower is better. "Copy the context" repeats the embedding of the current frames:
+each (369 predictions); lower is better:
 
 | position k (2 frames each) | 1 | 2 | 3 |
 |---|---|---|---|
@@ -121,8 +146,9 @@ each (369 predictions); lower is better. "Copy the context" repeats the embeddin
 - Checks built in: the script fails if the predictor differs from the checkpoint's, and its training-setup numbers
   equal the library's own world-model loss (maximum gap 0.0).
 
-Reproduce with `uv run --no-sync python scripts/vla_jepa_predictor.py --stride 1` (about 5 minutes); it writes
-`outputs/vla_jepa_predictor/stride1/metrics.json`.
+Reproduce with `uv run --no-sync python scripts/vla_jepa_predictor.py --stride 1` (about 5 minutes, writes
+`outputs/vla_jepa_predictor/stride1/metrics.json`) and `uv run --no-sync python scripts/vla_jepa_gifs.py` (about 5
+minutes, writes the three GIFs to `outputs/vla_jepa_gifs/`).
 
 ## Licence
 
