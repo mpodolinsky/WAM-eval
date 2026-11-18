@@ -12,6 +12,7 @@ How the environment is put together and why. None of this is needed to run an ev
 | `submodules/lerobot` | LeRobot at the commit of the Cosmos3 model card |
 | `submodules/LIBERO` | `hf-libero` 0.1.4, as in the Cosmos3 model card |
 | `scripts/cosmos3_predicted_video.py` | compares the video Cosmos3 predicts with the real frames (see the README) |
+| `scripts/vla_jepa_predictor.py` | runs VLA-JEPA's world-model head from a frame buffer and scores it (see the README) |
 
 `eval.sh` also writes a repo-local LIBERO config (`.libero/`, ignored by git), because LIBERO prompts on stdin at its
 first import otherwise, and sets `MUJOCO_GL=egl` for headless rendering. LIBERO's simulation assets are downloaded

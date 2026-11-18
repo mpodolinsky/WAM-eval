@@ -85,6 +85,45 @@ success. Reproduce with `uv run --no-sync python scripts/cosmos3_predicted_video
 --detail-chunks 0,7` (about 11 GB of GPU memory); it writes the GIFs, `metrics.json` and figures of the denoising and
 of other noise seeds to `outputs/cosmos3_predicted_video/`.
 
+## VLA-JEPA: the world-model head at runtime
+
+VLA-JEPA acts without ever running its world model: a V-JEPA2 predictor, trained as an auxiliary loss, guesses the
+embeddings of the next frames from the embeddings of earlier ones and Qwen's "action tokens". `RuntimePredictor` in
+[`scripts/vla_jepa_predictor.py`](scripts/vla_jepa_predictor.py) runs it anyway, from a buffer of the last two frames
+(one V-JEPA2 tubelet), and rolls it forward for 3 positions of 2 frames, up to 6 steps (0.3 s) ahead. The policy runs
+unchanged. The output is V-JEPA2 embeddings, 256 tokens of 2048 numbers per position, not pictures.
+
+The predictor and the V-JEPA2 encoder are in the checkpoint: the predictor's weights match it exactly, and the
+encoder is Facebook's public `vjepa2-vitl-fpc64-256` (identical after casting to BF16), frozen in training. The
+checkpoint stores both in BF16, so they may be a rounding of the training weights; I did not compare with the
+authors' original checkpoint.
+
+L1 error against V-JEPA2's embeddings of the real frames that followed (the training loss), 10 tasks with one episode
+each (369 predictions); lower is better. "Copy the context" repeats the embedding of the current frames:
+
+| position k (2 frames each) | 1 | 2 | 3 |
+|---|---|---|---|
+| runtime predictor (2-frame buffer) | 1.73 | 1.77 | 1.79 |
+| copy the context | 1.91 | 1.99 | 1.99 |
+| runtime predictor with zero action tokens | 1.78 | 1.81 | 1.84 |
+| training setup (real earlier positions as context) | 1.62 | 1.61 | 1.68 |
+| training setup, copy the previous position | 2.18 | 2.13 | 2.15 |
+| cosine similarity on the 20% of tokens that change most: runtime / copy | 0.52 / 0.36 | 0.50 / 0.34 | 0.48 / 0.34 |
+
+- The predictor works: it beats copying the context in the training setup (about 25% lower L1) and at runtime from
+  two frames (9 to 11%). Averaged over all tokens the cosine similarity is no better than copying; the gain is on the
+  tokens that change.
+- Its action conditioning barely matters. Action tokens from another task, or from another moment, give the same
+  error as the right ones to three decimals; zeros are only about 2% worse.
+- The training clips are consecutive dataset frames, which the dataset lists as 10 fps while the simulator steps at
+  20 Hz. `--stride 1` (one env step between frames) and `--stride 2` give the same results (L1 1.73 and 1.74 at k=1),
+  so this check does not tell which spacing is right.
+- Checks built in: the script fails if the predictor differs from the checkpoint's, and its training-setup numbers
+  equal the library's own world-model loss (maximum gap 0.0).
+
+Reproduce with `uv run --no-sync python scripts/vla_jepa_predictor.py --stride 1` (about 5 minutes); it writes
+`outputs/vla_jepa_predictor/stride1/metrics.json`.
+
 ## Licence
 
 The code is Apache-2.0. The model weights keep their own licences (Cosmos3: [OpenMDW-1.1](https://openmdw.ai/license/1-1/);
