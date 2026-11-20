@@ -1,6 +1,6 @@
 """Predict VLA-JEPA's V-JEPA2 latents at runtime from a small frame buffer, and score them against the real future.
 
-    uv run --no-sync python scripts/vla_jepa_predictor.py --task-ids 0 1 2 --stride 1
+    uv run --no-sync python scripts/vla_jepa/predictor.py --task-ids 0 1 2 --stride 1
 
 VLA-JEPA trains a world-model head on top of the policy: from the V-JEPA2 embeddings of the first positions of an
 8-frame clip (one position = a tubelet of 2 frames) and the "action tokens" Qwen3-VL produces for the clip's first
@@ -29,7 +29,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F  # noqa: N812
 
-REPO = Path(__file__).resolve().parents[1]
+REPO = Path(__file__).resolve().parents[2]
 os.environ.setdefault("MUJOCO_GL", "egl")
 os.environ.setdefault("LIBERO_CONFIG_PATH", str(REPO / ".libero"))
 

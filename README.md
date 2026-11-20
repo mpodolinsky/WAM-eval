@@ -38,6 +38,8 @@ and a video per episode.
 
 ## Cosmos3: the predicted video
 
+The architecture is drawn in [scripts/cosmos3/README.md](scripts/cosmos3/README.md).
+
 Alongside each chunk of 16 actions, Cosmos3 predicts the next 16 frames of both cameras. The policy discards them;
 `--policy.save_predicted_video=true` keeps them (as `pred_episode_*.mp4`).
 
@@ -81,7 +83,7 @@ moves" (the first frame repeated):
 The prediction beats "nothing moves" at every horizon and degrades with it; the decoded current frame itself only
 reaches 33 to 35 dB (four chunks of task 0), the limit of the VAE. The video is a sample: other noise seeds give
 similar futures that differ in detail. These are three tasks with one episode each, and PSNR measures pixels, not task
-success. Reproduce with `uv run --no-sync python scripts/cosmos3_predicted_video.py --task-id 0 --chunks 12
+success. Reproduce with `uv run --no-sync python scripts/cosmos3/predicted_video.py --task-id 0 --chunks 12
 --detail-chunks 0,7` (about 11 GB of GPU memory); it writes the GIFs, `metrics.json` and figures of the denoising and
 of other noise seeds to `outputs/cosmos3_predicted_video/`.
 
@@ -105,7 +107,7 @@ Tasks 0 and 4 succeeded, at steps 258 and 223; task 3 failed after 520 steps. On
 
 ### The world-model head at runtime
 
-`RuntimePredictor` in [`scripts/vla_jepa_predictor.py`](scripts/vla_jepa_predictor.py) runs the predictor anyway, from a
+`RuntimePredictor` in [`scripts/vla_jepa/predictor.py`](scripts/vla_jepa/predictor.py) runs the predictor anyway, from a
 buffer of the last two frames (one V-JEPA2 tubelet), and rolls it forward for 3 positions of 2 frames, up to 6 steps
 (0.3 s) ahead. The policy runs unchanged. The output is V-JEPA2 embeddings (256 tokens of 2048 numbers per position),
 not pictures. The predictor and the V-JEPA2 encoder are in the checkpoint: the predictor's weights match it exactly,
@@ -146,8 +148,8 @@ each (369 predictions); lower is better:
 - Checks built in: the script fails if the predictor differs from the checkpoint's, and its training-setup numbers
   equal the library's own world-model loss (maximum gap 0.0).
 
-Reproduce with `uv run --no-sync python scripts/vla_jepa_predictor.py --stride 1` (about 5 minutes, writes
-`outputs/vla_jepa_predictor/stride1/metrics.json`) and `uv run --no-sync python scripts/vla_jepa_gifs.py` (about 5
+Reproduce with `uv run --no-sync python scripts/vla_jepa/predictor.py --stride 1` (about 5 minutes, writes
+`outputs/vla_jepa_predictor/stride1/metrics.json`) and `uv run --no-sync python scripts/vla_jepa/gifs.py` (about 5
 minutes, writes the three GIFs to `outputs/vla_jepa_gifs/`).
 
 ## Licence

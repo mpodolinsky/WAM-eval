@@ -1,6 +1,6 @@
 """The GIFs of the VLA-JEPA section of the README: rollouts, the world-model head at runtime, and the architecture.
 
-    uv run --no-sync python scripts/vla_jepa_gifs.py --tasks 0 3 4 --map-task 0
+    uv run --no-sync python scripts/vla_jepa/gifs.py --tasks 0 3 4 --map-task 0
 
 Writes to `outputs/vla_jepa_gifs/`:
 
@@ -24,7 +24,7 @@ import torch.nn.functional as F  # noqa: N812
 from PIL import Image, ImageDraw, ImageFont
 
 from lerobot.configs.eval import EvalPipelineConfig
-from vla_jepa_predictor import REPO, RuntimePredictor, launch, run_episode, setup, unit_embeddings
+from predictor import REPO, RuntimePredictor, launch, run_episode, setup, unit_embeddings
 
 TOKENS = 16  # the 256 tokens of a position form a 16 x 16 grid
 VIEW_DIM = 1024  # V-JEPA2 ViT-L features of one camera; the two cameras are concatenated
@@ -223,7 +223,7 @@ def architecture_gif(out: Path) -> None:
         (acting[0] + ["tok"], acting[1] + ["qwen-tok"], YELLOW, "Qwen also writes 24 'action tokens' (hidden states at placeholder tokens in its prompt)."),
         (world[0], world[1], BLUE, "World model: the frozen V-JEPA2 encoder embeds the frames; the predictor guesses the next ones."),
         (None, None, WHITE, "Training: L1 between predicted and real embeddings (weight 0.1) trains the predictor and Qwen's tokens."),
-        (None, None, WHITE, "At inference only the top path runs; the bottom one is run here by scripts/vla_jepa_predictor.py."),
+        (None, None, WHITE, "At inference only the top path runs; the bottom one is run here by scripts/vla_jepa/predictor.py."),
     ]
     frames = []
     for lit_boxes, lit_arrows, colour, caption in phases:

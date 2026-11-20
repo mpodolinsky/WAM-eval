@@ -1,6 +1,6 @@
 """Compare the video Cosmos3 predicts with what the simulator then does, in a closed-loop LIBERO-10 episode.
 
-    uv run --no-sync python scripts/cosmos3_predicted_video.py --task-id 0 --chunks 12
+    uv run --no-sync python scripts/cosmos3/predicted_video.py --task-id 0 --chunks 12
 
 The policy runs as in `eval.sh` (one episode, batch size 1). Every 16 steps it predicts a chunk of 16 actions together
 with the next 16 frames of the two cameras; the prediction is decoded and paired with the real frames that follow.
@@ -25,7 +25,7 @@ import numpy as np
 import torch
 from PIL import Image, ImageDraw
 
-REPO = Path(__file__).resolve().parents[1]
+REPO = Path(__file__).resolve().parents[2]
 os.environ.setdefault("MUJOCO_GL", "egl")
 os.environ.setdefault("LIBERO_CONFIG_PATH", str(REPO / ".libero"))
 
