@@ -6,3 +6,5 @@ outputs/
 .mujoco/
 .libero/
 *.egg-info/
+.libero-x/
+.cache/

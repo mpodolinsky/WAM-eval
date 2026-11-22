@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Evaluate a policy on LIBERO-10 with the protocol of its model card or guide.
-#   ./eval.sh <policy> [lerobot-eval flags...]        policy: cosmos3 | vla-jepa
-# Any lerobot-eval flag can be appended and overrides the default (the last value wins), e.g.
+#   ./eval.sh <policy> [flags...]        policy: cosmos3 | vla-jepa | vla-jepa-libero-x
+# The first two run lerobot-eval; any of its flags can be appended and overrides the default (the last value wins), e.g.
 #   ./eval.sh cosmos3 --eval.n_episodes=2 --env.task_ids='[0,1]' --eval.batch_size=1 --output_dir=outputs/smoke
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -37,8 +37,10 @@ case "$policy" in
         ) ;;
     vla-jepa)  # lerobot/VLA-JEPA-LIBERO, LeRobot guide: 10 episodes per task
         defaults=(--policy.path=lerobot/VLA-JEPA-LIBERO --eval.n_episodes=10 --eval.batch_size=5) ;;
+    vla-jepa-libero-x)  # the LIBERO-X fine-tune of VLA-JEPA, with LIBERO-X's own protocol (not lerobot-eval)
+        exec uv run --no-sync python scripts/libero_x/eval.py --output-dir "outputs/eval/$policy" "$@" ;;
     *)
-        echo "usage: ./eval.sh <cosmos3|vla-jepa> [lerobot-eval flags...]" >&2
+        echo "usage: ./eval.sh <cosmos3|vla-jepa|vla-jepa-libero-x> [flags...]" >&2
         exit 2 ;;
 esac
 

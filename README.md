@@ -1,19 +1,21 @@
 # WAM-eval
 
-Evaluate world action models (WAMs) and related VLAs on LIBERO-10 with [LeRobot](https://github.com/huggingface/lerobot),
-using the protocol of each model's card or guide. One environment, one command per policy.
+Evaluate world action models (WAMs) and related VLAs on LIBERO-10 and LIBERO-X with [LeRobot](https://github.com/huggingface/lerobot),
+using the protocol of each model's card or guide (LIBERO-X: its own template). One environment, one command per policy.
 
-| `./eval.sh <policy>` | checkpoint | what it is | reported on LIBERO-10 | check here |
+| `./eval.sh <policy>` | checkpoint | what it is | reported | check here |
 |---|---|---|---|---|
-| `cosmos3` | [`lerobot/Cosmos3-Edge-Policy-LIBERO_10`](https://huggingface.co/lerobot/Cosmos3-Edge-Policy-LIBERO_10) | world action model ([Cosmos 3](https://arxiv.org/abs/2606.02800)): predicts the next 16 frames and the actions jointly | 95.2% (476/500) | 10/10 tasks, 1 episode each |
-| `vla-jepa` | [`lerobot/VLA-JEPA-LIBERO`](https://huggingface.co/lerobot/VLA-JEPA-LIBERO) | VLA ([VLA-JEPA](https://arxiv.org/abs/2602.10098)) trained with a V-JEPA2 world-model loss, Qwen3-VL-2B backbone | 96/100 episodes in the LeRobot guide (its table also says 93.0%) | 9/10 tasks, 1 episode each |
+| `cosmos3` | [`lerobot/Cosmos3-Edge-Policy-LIBERO_10`](https://huggingface.co/lerobot/Cosmos3-Edge-Policy-LIBERO_10) | world action model ([Cosmos 3](https://arxiv.org/abs/2606.02800)): predicts the next 16 frames and the actions jointly | 95.2% (476/500) on LIBERO-10 | 10/10 tasks, 1 episode each |
+| `vla-jepa` | [`lerobot/VLA-JEPA-LIBERO`](https://huggingface.co/lerobot/VLA-JEPA-LIBERO) | VLA ([VLA-JEPA](https://arxiv.org/abs/2602.10098)) trained with a V-JEPA2 world-model loss, Qwen3-VL-2B backbone | 96/100 episodes on LIBERO-10 in the LeRobot guide (its table also says 93.0%) | 9/10 tasks, 1 episode each |
+| `vla-jepa-libero-x` | [`podolinsky/vla-jepa-libero-x-level123-step10000`](https://huggingface.co/podolinsky/vla-jepa-libero-x-level123-step10000) (private) | the VLA-JEPA above, fully fine-tuned on LIBERO-X Levels 1-3 (218 tasks); an intermediate checkpoint, step 10,000 of 16,000 | none: its card says it was never run in the simulator | 150 episodes over 30 tasks, see [LIBERO-X](#libero-x) |
 
-The check is one episode per task, to see that the setup works. It is not a replication of the reported numbers: the
-full evaluations (500 and 100 episodes) have not been run here.
+The LIBERO-10 checks are one episode per task, to see that the setup works. They are not replications of the reported
+numbers: the full evaluations (500 and 100 episodes) have not been run here.
 
 ## Setup
 
-Linux x86_64, one NVIDIA GPU (about 10 GB for Cosmos3, 7 GB for VLA-JEPA), and `git`, `uv`, `cmake`, `g++`, `curl`.
+Linux x86_64, one NVIDIA GPU (about 10 GB for Cosmos3, 7 GB for VLA-JEPA), and `git`, `uv`, `cmake`, `g++`, `curl`. The
+LIBERO-X submodule is about 800 MB; its checkpoint is private, so `hf auth login` with an account that can read it.
 
 ```bash
 git clone --recurse-submodules https://github.com/mpodolinsky/WAM-eval && cd WAM-eval
@@ -30,11 +32,50 @@ evaluations silently depend on: [docs/implementation-notes.md](docs/implementati
 ./eval.sh cosmos3                       # model card protocol: 10 tasks x 50 episodes
 ./eval.sh vla-jepa                      # LeRobot guide protocol: 10 tasks x 10 episodes
 ./eval.sh vla-jepa --env.task_ids='[0,1]' --eval.n_episodes=2 --eval.batch_size=1 --output_dir=outputs/smoke
+./eval.sh vla-jepa-libero-x --levels LEVEL1 --n-tasks 5 --n-rollouts 5   # LIBERO-X, see below
 ```
 
 Any [`lerobot-eval`](https://huggingface.co/docs/lerobot/libero) flag can be appended and overrides the default (the
 last value wins). Results go to `outputs/eval/<policy>/`: `eval_info.json` with the success rate overall and per task,
 and a video per episode.
+
+## LIBERO-X
+
+[LIBERO-X](https://github.com/meituan/LIBERO-X) extends LIBERO with new objects, textures and goal predicates over
+difficulty levels. `./eval.sh vla-jepa-libero-x` evaluates the VLA-JEPA fine-tune above on the 218 Level 1-3 tasks it
+was trained on (`scripts/libero_x/tasks/`), with LIBERO-X's own protocol: each task's stored init states (10 per task;
+the first `--n-rollouts` are used), a fresh environment per episode, at most 1200 steps, one 7-D action per env step.
+
+```bash
+./eval.sh vla-jepa-libero-x                                    # LEVEL1: all 72 tasks x 5 episodes
+./eval.sh vla-jepa-libero-x --levels LEVEL1 LEVEL2 LEVEL3 --save-videos
+./eval.sh vla-jepa-libero-x --levels LEVEL2 --n-tasks 10 --n-rollouts 3
+./eval.sh vla-jepa-libero-x --policy-path <another LeRobot checkpoint with 7-D actions>
+```
+
+It writes `results.jsonl` (one line per episode; an interrupted run resumes), `summary.json` and, with `--save-videos`,
+a video per episode to `outputs/eval/vla-jepa-libero-x/`. It does not use `lerobot-eval`: LIBERO-X has its own `libero`
+package and image convention (see [docs/implementation-notes.md](docs/implementation-notes.md), which also lists the
+checks made on the pipeline before any success rate was read).
+
+**Pilot** (the first closed-loop run of this checkpoint): init states 0-4 of a sample of tasks, one run.
+
+| level | tasks | episodes | successes | success rate (95% CI) |
+|---|---|---|---|---|
+| LEVEL1 | 12 of 72 | 60 | 52 | 86.7% (75.8-93.1) |
+| LEVEL2 | 9 of 73 | 45 | 23 | 51.1% (37.0-65.0) |
+| LEVEL3 | 9 of 73 | 45 | 10 | 22.2% (12.5-36.3) |
+
+- Success falls steeply with the level. The tasks with no success in 5 episodes were, on Level 2, "place the frypan on
+  the top layer of the shelf" and "place the moka pot on the stove and close the stove"; on Level 3, "place the frypan
+  on the flat stove", "place the moka pot on the stove", "open the microwave and place the red mug in it" and one
+  two-object shelf task. Frying pan, moka pot and shelf tasks make up most of the failures.
+- These are training tasks, and the init states are LIBERO-X's scene layouts, not the demonstrations' own start poses, so
+  this is not a held-out measure. The checkpoint is also unfinished (its learning rate had not finished decaying), the
+  samples are small (the confidence intervals are wide), and the policy samples its actions: a first LEVEL1 run with
+  other seeds also gave 52/60, with different per-task counts.
+- An episode takes 17 s on average on an RTX 4090 (150 episodes in 42 minutes, memory flat), so all 218 tasks x 5
+  episodes would take about 5 hours.
 
 ## Cosmos3: the predicted video
 

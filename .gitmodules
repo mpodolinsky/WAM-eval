@@ -6,3 +6,7 @@
 	path = submodules/lerobot
 	url = https://github.com/huggingface/lerobot
 	ignore = untracked
+[submodule "submodules/LIBERO-X"]
+	path = submodules/LIBERO-X
+	url = https://github.com/meituan/LIBERO-X
+	ignore = untracked
