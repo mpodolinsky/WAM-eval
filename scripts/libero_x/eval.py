@@ -30,7 +30,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 LIBERO_X = REPO / "submodules" / "LIBERO-X"
 TASKS = Path(__file__).resolve().parent / "tasks"
-DEFAULT_POLICY = "podolinsky/vla-jepa-libero-x-level123-step10000"
+DEFAULT_POLICY = "podolinsky/vla-jepa-libero-x-level123"
 LEVELS = ("LEVEL1", "LEVEL2", "LEVEL3")  # the levels with a task list: the 218 tasks the checkpoint was trained on
 
 
