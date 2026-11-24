@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Evaluate a policy on LIBERO-10 with the protocol of its model card or guide.
-#   ./eval.sh <policy> [flags...]        policy: cosmos3 | vla-jepa | vla-jepa-libero-x
+#   ./eval.sh <policy> [flags...]        policy: cosmos3 | vla-jepa | vla-jepa-libero-x | cosmos3-libero-x
 # The first two run lerobot-eval; any of its flags can be appended and overrides the default (the last value wins), e.g.
 #   ./eval.sh cosmos3 --eval.n_episodes=2 --env.task_ids='[0,1]' --eval.batch_size=1 --output_dir=outputs/smoke
 set -euo pipefail
@@ -39,8 +39,11 @@ case "$policy" in
         defaults=(--policy.path=lerobot/VLA-JEPA-LIBERO --eval.n_episodes=10 --eval.batch_size=5) ;;
     vla-jepa-libero-x)  # the LIBERO-X fine-tune of VLA-JEPA, with LIBERO-X's own protocol (not lerobot-eval)
         exec uv run --no-sync python scripts/libero_x/eval.py --output-dir "outputs/eval/$policy" "$@" ;;
+    cosmos3-libero-x)  # the LIBERO-X fine-tune of Cosmos3-Edge (EMA weights, bfloat16, TF32 off as in the Cosmos3 card)
+        exec uv run --no-sync python scripts/libero_x/eval.py --output-dir "outputs/eval/$policy" \
+            --policy-path podolinsky/cosmos3-edge-libero-x-level123-step8750 --policy-subfolder ema --dtype bfloat16 --no-tf32 "$@" ;;
     *)
-        echo "usage: ./eval.sh <cosmos3|vla-jepa|vla-jepa-libero-x> [flags...]" >&2
+        echo "usage: ./eval.sh <cosmos3|vla-jepa|vla-jepa-libero-x|cosmos3-libero-x> [flags...]" >&2
         exit 2 ;;
 esac
 

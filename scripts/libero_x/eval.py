@@ -8,8 +8,10 @@ docs/implementation-notes.md). The protocol is the template's: a fresh environme
 init states (the first `--n-rollouts` of the 10 of each task), the policy's action applied one per env step, at most
 `--max-steps` (1200) steps, and success is the environment's `done`.
 
-The policy is any LeRobot checkpoint with this input and output layout: two cameras, an 8-D state
-`[eef pos, axis-angle, gripper fingers]` and 7-D actions `[dpos, axis-angle, gripper]` (+-1 after post-processing).
+The policy is any LeRobot checkpoint with this input layout: two cameras and an 8-D state
+`[eef pos, axis-angle, gripper fingers]`, and either 7-D actions `[dpos, axis-angle, gripper]` (+-1 after
+post-processing) or the 10-D actions `[dpos, rot6d, gripper]` of Cosmos3's rot6d datasets (decoded to the 7-D command
+as LeRobot's `Cosmos3LiberoActionProcessorStep` does).
 Images are fed at the simulator's 256 px, flipped vertically only (LIBERO-X's native convention); the policy resizes.
 
 Writes to `--output-dir`: `results.jsonl` (one line per episode; an interrupted run resumes), `summary.json` and,
@@ -69,6 +71,7 @@ from libero.libero.utils.parse_bddl import parse_bddl_file  # noqa: E402
 
 from lerobot.configs.policies import PreTrainedConfig  # noqa: E402
 from lerobot.policies import get_policy_class, make_pre_post_processors  # noqa: E402
+from lerobot.policies.cosmos3.processor_cosmos3 import Cosmos3LiberoActionProcessorStep  # noqa: E402
 from lerobot.processor import policy_output_to_transition, transition_to_policy_action  # noqa: E402
 
 DUMMY_ACTION = [0.0] * 6 + [-1.0]
@@ -102,22 +105,29 @@ def raw_batch(obs: dict, prompt: str) -> dict:
     }
 
 
-def compatible_checkpoint(path: str) -> str:
+def compatible_checkpoint(path: str, subfolder: str = "") -> str:
     """A local copy of the checkpoint whose config only has fields the pinned LeRobot knows.
 
     LeRobot's config decoding is strict, and a checkpoint written by a newer LeRobot may carry fields that the pinned
     commit does not have (the LIBERO-X VLA-JEPA fine-tune was trained with 0.7.0 and has `world_model_rope_legacy`).
     Unknown fields are listed and dropped; the weights are symlinked. Check that the dropped fields cannot matter for
-    the policy's outputs (here: a flag of the world-model head, which is not run when acting)."""
+    the policy's outputs (here: a flag of the world-model head, which is not run when acting).
+
+    `subfolder` picks a folder of the repo that loads on its own (the `ema/` weights of the Cosmos3 fine-tune); only
+    that folder is downloaded."""
     from huggingface_hub import snapshot_download
 
-    src = Path(path) if Path(path).is_dir() else Path(snapshot_download(path))
+    if Path(path).is_dir():
+        src = Path(path) / subfolder
+    else:
+        patterns = [f"{subfolder}/*"] if subfolder else None
+        src = Path(snapshot_download(path, allow_patterns=patterns)) / subfolder
     raw = json.loads((src / "config.json").read_text())
     known = {f.name for f in dataclasses.fields(PreTrainedConfig.get_choice_class(raw["type"]))} | {"type"}  # "type" picks the class
     unknown = sorted(set(raw) - known)
     if not unknown:
         return str(src)
-    dst = REPO / ".cache" / "checkpoints" / src.parent.parent.name.replace("models--", "") / src.name
+    dst = REPO / ".cache" / "checkpoints" / (path.replace("/", "--") + (f"--{subfolder}" if subfolder else ""))
     dst.mkdir(parents=True, exist_ok=True)
     for f in src.iterdir():
         link = dst / f.name
@@ -128,14 +138,38 @@ def compatible_checkpoint(path: str) -> str:
     return str(dst)
 
 
+def load_weights(policy, weights: Path) -> None:
+    """Copy a safetensors file into the policy one tensor at a time, and fail on any missing or unexpected key.
+
+    LeRobot's loader reads the whole file first, which for an fp32 checkpoint of 18 GB and a bf16 model of 9 GB needs
+    27 GB of host (or GPU) memory at once, and it only logs missing keys."""
+    from safetensors import safe_open
+
+    state = policy.state_dict()
+    with safe_open(str(weights), "pt", device="cpu") as f:
+        keys = set(f.keys())
+        if keys != set(state):
+            raise RuntimeError(f"checkpoint keys differ from the model's: missing {sorted(set(state) - keys)[:5]}, "
+                               f"unexpected {sorted(keys - set(state))[:5]}")  # fmt: skip
+        with torch.no_grad():
+            for key in keys:
+                state[key].copy_(f.get_tensor(key))
+
+
 class PolicyRunner:
     """A LeRobot policy with its processors: `act` returns one 7-D simulator action per call (the policy keeps a queue
     of the chunk it predicted)."""
 
-    def __init__(self, path: str, device: str = "cuda"):
-        path = compatible_checkpoint(path)
+    def __init__(self, path: str, device: str = "cuda", subfolder: str = "", dtype: str | None = None):
+        path = compatible_checkpoint(path, subfolder)
         config = PreTrainedConfig.from_pretrained(path)
-        self.policy = get_policy_class(config.type).from_pretrained(path).to(device).eval()
+        if dtype:  # as `lerobot-eval --policy.dtype=...` (the Cosmos3 card's evaluation runs in bfloat16)
+            config.dtype = getattr(torch, dtype)
+            policy = get_policy_class(config.type)(config)  # built on the CPU in `dtype`, filled tensor by tensor
+            load_weights(policy, Path(path) / "model.safetensors")
+            self.policy = policy.to(device).eval()
+        else:
+            self.policy = get_policy_class(config.type).from_pretrained(path).to(device).eval()
         self.pre, self.post = make_pre_post_processors(
             self.policy.config, pretrained_path=path, preprocessor_overrides={"device_processor": {"device": device}}
         )  # fmt: skip
@@ -147,7 +181,10 @@ class PolicyRunner:
         batch = self.pre(raw_batch(obs, prompt))
         with torch.inference_mode():
             action = transition_to_policy_action(policy_output_to_transition(self.policy.select_action(batch)))
-        return np.clip(self.post(action)[0].float().cpu().numpy(), -1.0, 1.0).tolist()
+        action = self.post(action)
+        if action.shape[-1] == 10:  # Cosmos3's rot6d actions -> the 7-D simulator command (gripper 1 open -> -1 open)
+            action = Cosmos3LiberoActionProcessorStep().action(action.float())
+        return np.clip(action[0].float().cpu().numpy(), -1.0, 1.0).tolist()
 
 
 def load_task_names(level: str, args: argparse.Namespace) -> list[tuple[int, str]]:
@@ -221,7 +258,9 @@ def main(args: argparse.Namespace) -> None:
     rows = [json.loads(line) for line in results.read_text().splitlines()] if results.exists() else []
     done_keys = {(r["level"], r["task_file"], r["episode_index"]) for r in rows}
     print(f"policy {args.policy_path}; {len(rows)} episodes already in {results}", flush=True)
-    runner = PolicyRunner(args.policy_path, args.device)
+    if args.no_tf32:
+        torch.backends.cuda.matmul.allow_tf32 = torch.backends.cudnn.allow_tf32 = False
+    runner = PolicyRunner(args.policy_path, args.device, args.policy_subfolder, args.dtype)
 
     for level in args.levels:
         base = LIBERO_X / "libero" / "libero_x"
@@ -258,7 +297,7 @@ def main(args: argparse.Namespace) -> None:
                       f"{row['seconds']:5.1f}s, rss {row['peak_rss_mb']} MB, gpu {row['peak_gpu_mb']} MB"
                       + (f"  ERROR {error}" if error else ""), flush=True)  # fmt: skip
     summary = summarise(rows)
-    (out / "summary.json").write_text(json.dumps({"policy": args.policy_path, "max_steps": args.max_steps, **summary}, indent=1))
+    (out / "summary.json").write_text(json.dumps({"policy": args.policy_path, "subfolder": args.policy_subfolder, "dtype": args.dtype, "max_steps": args.max_steps, **summary}, indent=1))
     for level, s in summary.items():
         print(f"{level}: {s['successes']}/{s['episodes']} = {s['success_rate_pct']}% (95% CI {s['ci95_pct'][0]}-{s['ci95_pct'][1]}), "
               f"{s['tasks_with_a_success']}/{s['tasks']} tasks with a success")  # fmt: skip
@@ -267,6 +306,9 @@ def main(args: argparse.Namespace) -> None:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--policy-path", default=DEFAULT_POLICY, help="LeRobot checkpoint (Hub id or folder)")
+    ap.add_argument("--policy-subfolder", default="", help="folder of the repo to load, e.g. ema (Cosmos3 fine-tunes)")
+    ap.add_argument("--dtype", default=None, help="override the policy's dtype, e.g. bfloat16")
+    ap.add_argument("--no-tf32", action="store_true", help="turn TF32 off (the Cosmos3 card's evaluation does)")
     ap.add_argument("--levels", nargs="+", default=["LEVEL1"], choices=LEVELS)
     ap.add_argument("--n-tasks", type=int, default=None, help="sample N tasks of each level (seeded); default all")
     ap.add_argument("--task-indices", type=int, nargs="*", default=None, help="positions in the level's task list")
