@@ -7,7 +7,8 @@ using the protocol of each model's card or guide (LIBERO-X: its own template). O
 |---|---|---|---|---|
 | `cosmos3` | [`lerobot/Cosmos3-Edge-Policy-LIBERO_10`](https://huggingface.co/lerobot/Cosmos3-Edge-Policy-LIBERO_10) | world action model ([Cosmos 3](https://arxiv.org/abs/2606.02800)): predicts the next 16 frames and the actions jointly | 95.2% (476/500) on LIBERO-10 | 10/10 tasks, 1 episode each |
 | `vla-jepa` | [`lerobot/VLA-JEPA-LIBERO`](https://huggingface.co/lerobot/VLA-JEPA-LIBERO) | VLA ([VLA-JEPA](https://arxiv.org/abs/2602.10098)) trained with a V-JEPA2 world-model loss, Qwen3-VL-2B backbone | 96/100 episodes on LIBERO-10 in the LeRobot guide (its table also says 93.0%) | 9/10 tasks, 1 episode each |
-| `vla-jepa-libero-x` | [`podolinsky/vla-jepa-libero-x-level123`](https://huggingface.co/podolinsky/vla-jepa-libero-x-level123) (private) | the VLA-JEPA above, fully fine-tuned on LIBERO-X Levels 1-3 (218 tasks), final checkpoint (step 16,000 of 16,000) | none: its card says it was never run in the simulator | 58.5% (1275/2180) on the 218 training tasks, see [LIBERO-X](#libero-x) |
+| `vla-jepa-libero-x` | [`podolinsky/vla-jepa-libero-x-level123`](https://huggingface.co/podolinsky/vla-jepa-libero-x-level123) | the VLA-JEPA above, fully fine-tuned on LIBERO-X Levels 1-3 (218 tasks), final checkpoint (step 16,000 of 16,000) | none: its card says it was never run in the simulator | 58.5% (1275/2180) on the 218 training tasks, see [LIBERO-X](#libero-x) |
+| `cosmos3-libero-x` | [`podolinsky/cosmos3-edge-libero-x-level123-step8750`](https://huggingface.co/podolinsky/cosmos3-edge-libero-x-level123-step8750) (private), `ema/` weights | the Cosmos3 above, fully fine-tuned on LIBERO-X Levels 1-3 (218 tasks); an intermediate checkpoint, step 8,750 of 12,000 | none: its card says it was never run in the simulator | 54.2% (Level 1), 35.6% (Level 2), init states 0-4, see [LIBERO-X](#libero-x) |
 
 The LIBERO-10 checks are one episode per task, to see that the setup works. They are not replications of the reported
 numbers: the full evaluations (500 and 100 episodes) have not been run here.
@@ -15,7 +16,7 @@ numbers: the full evaluations (500 and 100 episodes) have not been run here.
 ## Setup
 
 Linux x86_64, one NVIDIA GPU (about 10 GB for Cosmos3, 7 GB for VLA-JEPA), and `git`, `uv`, `cmake`, `g++`, `curl`. The
-LIBERO-X submodule is about 800 MB; its checkpoint is private, so `hf auth login` with an account that can read it.
+LIBERO-X submodule is about 800 MB; the Cosmos3 fine-tune is private, so `hf auth login` with an account that can read it.
 
 ```bash
 git clone --recurse-submodules https://github.com/mpodolinsky/WAM-eval && cd WAM-eval
@@ -42,8 +43,8 @@ and a video per episode.
 ## LIBERO-X
 
 [LIBERO-X](https://github.com/meituan/LIBERO-X) extends LIBERO with new objects, textures and goal predicates over
-difficulty levels. `./eval.sh vla-jepa-libero-x` evaluates the VLA-JEPA fine-tune above on the 218 Level 1-3 tasks it
-was trained on (`scripts/libero_x/tasks/`), with LIBERO-X's own protocol: each task's stored init states (10 per task;
+difficulty levels. `./eval.sh vla-jepa-libero-x` and `./eval.sh cosmos3-libero-x` evaluate the two fine-tunes above on the
+218 Level 1-3 tasks they were trained on (`scripts/libero_x/tasks/`), with LIBERO-X's own protocol: each task's stored init states (10 per task;
 the first `--n-rollouts` are used), a fresh environment per episode, at most 1200 steps, one 7-D action per env step.
 
 ```bash
@@ -52,6 +53,7 @@ the first `--n-rollouts` are used), a fresh environment per episode, at most 120
 ./eval.sh vla-jepa-libero-x --levels LEVEL1 LEVEL2 LEVEL3 --save-videos
 ./eval.sh vla-jepa-libero-x --levels LEVEL2 --n-tasks 10 --n-rollouts 3
 ./eval.sh vla-jepa-libero-x --policy-path <another LeRobot checkpoint with 7-D actions>
+./eval.sh cosmos3-libero-x --levels LEVEL1 LEVEL2 --n-rollouts 5   # about 11 hours for Levels 1-2 (the output folder is cosmos3-libero-x)
 ```
 
 It writes `results.jsonl` (one line per episode; an interrupted run resumes), `summary.json` and, with `--save-videos`,
@@ -80,6 +82,29 @@ states of each, one run, no episode errors.
   harder than average: the Level 2 and 3 rates there are below the full-set ones).
 - An episode takes 16 s on average on an RTX 4090 (2180 episodes in 9.6 hours, 5.9 GB of GPU memory, about 11 GB of
   host memory at peak).
+
+**Result** of the Cosmos3 fine-tune (`podolinsky/cosmos3-edge-libero-x-level123-step8750`, EMA weights, bfloat16, TF32 off
+as in the Cosmos3 card's evaluation): init states 0-4 of each task, one run, 770 episodes, no episode errors.
+
+| level | tasks | episodes | successes | success rate (95% CI) | VLA-JEPA (final) on the same episodes |
+|---|---|---|---|---|---|
+| LEVEL1 | 72 | 360 | 195 | 54.2% (49.0-59.2) | 271 (75.3%) |
+| LEVEL2 | 73 | 365 | 130 | 35.6% (30.9-40.7) | 205 (56.2%) |
+| LEVEL3 | 9 of 73 | 45 | 8 | 17.8% (9.3-31.3) | 11 (24.4%) |
+
+- Level 3 was run only on the 9-task sample of the VLA-JEPA pilot, so its row is a sample, not the level; the full Level 3
+  and init states 5-9 were not run. The same 30-task sample gave 39/60, 15/45 and 8/45 on the three levels (VLA-JEPA at
+  step 16,000: 52/60, 24/45 and 11/45).
+- On the same episodes Cosmos3 trails VLA-JEPA clearly. Level 1: both models succeed in 177 episodes, only Cosmos3 in 18,
+  only VLA-JEPA in 94. Level 2: both in 113, only Cosmos3 in 17, only VLA-JEPA in 92. Cosmos3 has no success in 5
+  episodes on 13 of the 72 Level 1 tasks and 24 of the 73 Level 2 tasks; VLA-JEPA had none in 10 episodes on 3 and 7.
+- This is an intermediate checkpoint (step 8,750 of 12,000, the learning rate had not finished decaying) and its card
+  reports no simulator result, so the gap says nothing about the finished model. The intervals treat episodes as
+  independent, which they are not (the episodes of a task share their scene).
+- Before any rollout the checkpoint was checked on training data: its 16-step chunks differ from the dataset's by 0.067 on
+  average (0.205 for chunks of other episodes, 0.056 between two samples of the same observation), and on its first data file
+  (585 frames) the images and state equal the VLA-JEPA dataset's and the decoded actions do too, but for one frame. An episode takes 52 s on average on an RTX 4090 (a chunk
+  takes about 0.75 s; 770 episodes in 11 hours, 8.8 GB of GPU memory).
 
 ## Cosmos3: the predicted video
 
